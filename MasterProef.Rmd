@@ -1,0 +1,4133 @@
+---
+title: "VDJ-DB"
+author: "Ömer Sercik"
+date: "3/1/2022"
+output: html_document
+---
+
+# Required packages
+
+```{r}
+library(ggplot2)
+library(Peptides)
+library(heatmaply)
+library(randomForest)
+library(tree)
+library(gbm)
+library(class)
+library(e1071)
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+get_epitopes <- function(Tcr){
+  sub <- subset(DataCleaned, tcr == Tcr)
+  x <- sub$peptide
+  return(x)
+}
+get_tcr <- function(epitope){
+  sub <- subset(DataCleaned, peptide == epitope)
+  x <- sub$tcr
+  return(x)
+}
+```
+
+# Reading VDJDB data
+
+```{r}
+data <- read.csv("VDJDB.tsv", sep = "\t")
+```
+
+# Feature Engineering, data cleaning and descriptive statistics
+
+```{r, warning = F, message=F, error=F}
+aminoacids <- c("A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V")
+netcharge <- c("N", "P", "N", "Neg", "N", "N", "Neg", "N", "N", "N", "N", "P", "N", "N", "N", "N", "N", "N", "N", "N")
+hydropathy <- c(1.8, -4.5, -3.5, -3.5, 2.5, -3.5, -3.5, -0.4, -3.2, 4.5, 3.8, -3.9, 1.9, 2.8, -1.6, -0.8, -0.7, -0.9, -1.3, 4.2)
+mm <- c(89.094, 174.203, 132.119, 133.104, 121.154, 146.146, 147.131, 75.067, 155.156, 131.175, 131.175, 146.189, 149.208, 165.192, 115.132, 105.093, 119.119, 204.228, 181.191, 117.148)
+AminoAcidsFeatures <- data.frame(aminoacids, netcharge, hydropathy, mm)
+
+tcr <- data$CDR3
+peptide <- data$Epitope
+score <- data$Score
+
+length_tcr <- c()
+length_peptide <- c()
+
+n_tcr <- c()
+n_tcr_charge <- c()
+n_tcr_hydropathy <- c()
+c_tcr <- c()
+c_tcr_charge <- c()
+c_tcr_hydropathy <- c()
+
+n_peptide <- c()
+n_peptide_charge <- c()
+n_peptide_hydropathy <- c()
+c_peptide <- c()
+c_peptide_charge <- c()
+c_peptide_hydropathy <- c()
+
+mm_tcr <- c()
+mm_peptide <- c()
+
+VRegion <- c()
+DRegion <- c()
+JRegion <- c()
+
+for(i in 1:length(tcr)){
+  a <- tcr[i]
+  b <- peptide[i]
+  length_tcr <- append(length_tcr, nchar(a))
+  length_peptide <- append(length_peptide, nchar(b))
+  n_tcr <- append(n_tcr, substr(a, 1, 1))
+  n_tcr_charge <- append(n_tcr_charge, AminoAcidsFeatures$netcharge[AminoAcidsFeatures$aminoacids == substr(a, 1, 1)][1])
+  n_tcr_hydropathy <- append(n_tcr_hydropathy, AminoAcidsFeatures$hydropathy[AminoAcidsFeatures$aminoacids == substr(a, 1, 1)][1])
+  c_tcr <- append(c_tcr, substr(a, nchar(a), nchar(a)))
+  c_tcr_charge <- append(c_tcr_charge, AminoAcidsFeatures$netcharge[AminoAcidsFeatures$aminoacids == substr(a, nchar(a), nchar(a))][1])
+  c_tcr_hydropathy <- append(c_tcr_hydropathy, AminoAcidsFeatures$hydropathy[AminoAcidsFeatures$aminoacids == substr(a, nchar(a), nchar(a))][1])
+  n_peptide <- append(n_peptide, substr(b, 1, 1))
+  n_peptide_charge <- append(n_peptide_charge, AminoAcidsFeatures$netcharge[AminoAcidsFeatures$aminoacids == substr(b, 1, 1)][1])
+  n_peptide_hydropathy <- append(n_peptide_hydropathy, AminoAcidsFeatures$hydropathy[AminoAcidsFeatures$aminoacids == substr(b, 1, 1)][1])
+  c_peptide <- append(c_peptide, substr(b, nchar(b), nchar(b)))
+  c_peptide_charge <- append(c_peptide_charge, AminoAcidsFeatures$netcharge[AminoAcidsFeatures$aminoacids == substr(b, nchar(b), nchar(b))][1])
+  c_peptide_hydropathy <- append(c_peptide_hydropathy, AminoAcidsFeatures$hydropathy[AminoAcidsFeatures$aminoacids == substr(b, nchar(b), nchar(b))][1])
+  mm_a <- 0
+  for(k in 1:nchar(a)){
+    mm_a <- mm_a + AminoAcidsFeatures$mm[AminoAcidsFeatures$aminoacids == substr(a, k, k)][1]
+  }
+  mm_b <- 0
+  for(k in 1:nchar(b)){
+    mm_b <- mm_b + AminoAcidsFeatures$mm[AminoAcidsFeatures$aminoacids == substr(b, k, k)][1]
+  }
+  mm_tcr <- append(mm_tcr, mm_a)
+  mm_peptide <- append(mm_peptide, mm_b)
+  x <- data$CDR3fix[i]
+  x <- strsplit(x, split = ", ")[[1]]
+  for(k in 1:length(x)){
+    xx <- strsplit(x[k], split = ": ")[[1]]
+    if(xx[1] == "jStart"){
+      x1 <- as.numeric(xx[2])
+    }
+    if(xx[1] == "vEnd"){
+      x2 <- as.numeric(xx[2])
+    }
+  }
+  VRegion <- append(VRegion, substr(a, 1, x2))
+  DRegion <- append(DRegion, substr(a, x2+1, x1-1))
+  JRegion <- append(JRegion, substr(a, x1, nchar(a)))
+}
+
+mm_diff <- mm_tcr/mm_peptide
+score_bin <- ifelse(score == 3, 1, 0)
+Id <- data$complex.id
+TCRChain <- data$Gene
+DataFinal <- data.frame(Id, TCRChain, tcr, peptide, score, score_bin, length_tcr, length_peptide, n_tcr, n_tcr_charge, n_tcr_hydropathy, c_tcr, c_tcr_charge, c_tcr_hydropathy, n_peptide, n_peptide_charge, n_peptide_hydropathy, c_peptide, c_peptide_charge, c_peptide_hydropathy, mm_tcr, mm_peptide, mm_diff, VRegion, DRegion, JRegion)
+DataFinal$couple <- paste(DataFinal$tcr, DataFinal$peptide, sep = "-")
+```
+
+```{r}
+# Data Cleaning
+DataCleaned <- matrix(data = NA, nrow = length(unique(DataFinal$couple)), ncol = ncol(DataFinal))
+DataCleaned <- data.frame(DataCleaned)
+colnames(DataCleaned) <- colnames(DataFinal)
+for(i in 1:length(unique(DataFinal$couple))){
+  coup <- unique(DataFinal$couple)[i]
+  sub <- subset(DataFinal, couple == coup)
+  DataCleaned[i,] <- sub[1,]
+}
+DataCleaned$charge_tcr <- charge(DataCleaned$tcr)
+DataCleaned$charge_peptide <- charge(DataCleaned$peptide)
+DataCleaned$insta_tcr <- instaIndex(DataCleaned$tcr)
+DataCleaned$insta_peptide <- instaIndex(DataCleaned$peptide)
+DataCleaned$hydro_tcr <- hydrophobicity(DataCleaned$tcr)
+DataCleaned$hydro_peptide <- hydrophobicity(DataCleaned$peptide)
+DataCleaned$mm_tcr <- DataCleaned$mm_tcr - (nchar(DataCleaned$tcr)-1)*18
+DataCleaned$mm_peptide <- DataCleaned$mm_peptide - (nchar(DataCleaned$peptide)-1)*18
+DataCleaned$boman_tcr <- boman(DataCleaned$tcr)
+DataCleaned$aindex_tcr <- aIndex(DataCleaned$tcr)
+DataCleaned$boman_peptide <- boman(DataCleaned$peptide)
+DataCleaned$aindex_peptide <- aIndex(DataCleaned$peptide)
+x <- DataCleaned$tcr
+x1 <- unique(x)
+x2 <- c()
+for(i in 1:length(x1)){
+  sub <- subset(DataCleaned, tcr == x1[i])
+  g <- sub$TCRChain[1]
+  if(g == "TRA"){
+    x2 <- append(x2, "TCRalpha")
+  } else if(g == "TRB"){
+    x2 <- append(x2, "TCRbeta")
+  }
+}
+y <- DataCleaned$peptide
+y1 <- unique(y)
+y2 <- rep("Epitope", length(y1))
+z1 <- c(x1, y1)
+z2 <- c(x2, y2)
+DataCouples <- data.frame(z1, z2)
+colnames(DataCouples) <- c("Sequence", "Group")
+DataCouples$charge <- charge(DataCouples$Sequence)
+DataCouples$insta <- instaIndex(DataCouples$Sequence)
+DataCouples$hydro <- hydrophobicity(DataCouples$Sequence)
+DataCouples$length <- nchar(DataCouples$Sequence)
+MolMass <- c()
+for(i in 1:length(DataCouples$Sequence)){
+  pep <- DataCouples$Sequence[i]
+  group <- DataCouples$Group[i]
+  if(group != "Epitope"){
+    sub <- subset(DataCleaned, tcr == pep)
+    mm <- sub$mm_tcr[1]
+    MolMass <- append(MolMass, mm)
+  } else if(group == "Epitope"){
+    sub <- subset(DataCleaned, peptide == pep)
+    mm <- sub$mm_peptide[1]
+    MolMass <- append(MolMass, mm)
+  }
+}
+DataCouples$MolMass <- MolMass
+DataCouples$FirstAA <- substr(DataCouples$Sequence, 1, 1)
+DataCouples$LastAA <- substr(DataCouples$Sequence, nchar(DataCouples$Sequence), nchar(DataCouples$Sequence))
+VRegion <- c()
+DRegion <- c()
+JRegion <- c()
+for(i in 1:dim(DataCouples)[1]){
+  pep <- DataCouples$Sequence[i]
+  if(DataCouples$Group[i] != "Epitope"){
+    sub <- subset(DataCleaned, tcr == pep)
+    VRegion <- append(VRegion, sub$VRegion[1])
+    DRegion <- append(DRegion, sub$DRegion[1])
+    JRegion <- append(JRegion, sub$JRegion[1])
+  } else if(DataCouples$Group[i] == "Epitope"){
+    VRegion <- append(VRegion, "Not Applicable")
+    DRegion <- append(DRegion, "Not Applicable")
+    JRegion <- append(JRegion, "Not Applicable")
+  }
+}
+DataCouples$VRegion <- VRegion
+DataCouples$DRegion <- DRegion
+DataCouples$JRegion <- JRegion
+DataCouples$boman <- boman(DataCouples$Sequence)
+DataCouples$aindex <- aIndex(DataCouples$Sequence)
+```
+
+```{r}
+# Descriptive statistics
+NumberOfCouples <- length(DataCleaned$couple)
+NumberOfTCR <- length(which(DataCouples$Group != "Epitope"))
+NumberOfTCRa <- length(which(DataCouples$Group == "TCRalpha"))
+NumberOfTCRb <- length(which(DataCouples$Group == "TCRbeta"))
+NumberOfEpitopes <- length(which(DataCouples$Group == "Epitope"))
+MeanChargeTCR <- mean(DataCouples$charge[DataCouples$Group != "Epitope"])
+MeanChargeEpitope <- mean(DataCouples$charge[DataCouples$Group == "Epitope"])
+MeanInstaTCR <- mean(DataCouples$insta[DataCouples$Group != "Epitope"])
+MeanInstaEpitope <- mean(DataCouples$insta[DataCouples$Group == "Epitope"])
+MeanHydroTCR <- mean(DataCouples$hydro[DataCouples$Group != "Epitope"])
+MeanHydroEpitop <- mean(DataCouples$hydro[DataCouples$Group == "Epitope"])
+MeanLengthTCR <- mean(DataCouples$length[DataCouples$Group != "Epitope"])
+MeanLengthEpitope <- mean(DataCouples$length[DataCouples$Group == "Epitope"])
+MeanMolMassTCR <- mean(DataCouples$MolMass[DataCouples$Group != "Epitope"])
+MeanMolMassEpitope <- mean(DataCouples$MolMass[DataCouples$Group == "Epitope"])
+MostFreqFirstAATCR <- Mode(DataCouples$FirstAA[DataCouples$Group != "Epitope"])
+MostFreqLastAATCR <- Mode(DataCouples$LastAA[DataCouples$Group != "Epitope"])
+MostFreqFirstAAEpitope <- Mode(DataCouples$FirstAA[DataCouples$Group == "Epitope"])
+MostFreqLastAAEpitope <- Mode(DataCouples$LastAA[DataCouples$Group == "Epitope"])
+MeanNumberOfEpitopesBound <- c()
+MeanNumberOfTCRsBound <- c()
+for(i in 1:length(DataCouples$Sequence)){
+  if(DataCouples$Group[i] == "TCRbeta"){
+    MeanNumberOfEpitopesBound <- append(MeanNumberOfEpitopesBound, length(get_epitopes(DataCouples$Sequence[i])))
+  } else if(DataCouples$Group[i] == "Epitope"){
+    MeanNumberOfTCRsBound <- append(MeanNumberOfTCRsBound, length(get_tcr(DataCouples$Sequence[i])))
+  }
+}
+MeanNumberOfEpitopesBound <- mean(MeanNumberOfEpitopesBound)
+MeanNumberOfTCRsBound <- mean(MeanNumberOfTCRsBound)
+Desc <- data.frame(NumberOfCouples, NumberOfTCR, NumberOfTCRa, NumberOfTCRb, NumberOfEpitopes, MeanChargeTCR, MeanChargeEpitope, MeanInstaTCR, MeanInstaEpitope, MeanHydroTCR, MeanHydroEpitop, MeanLengthTCR, MeanLengthEpitope, MeanMolMassTCR, MeanMolMassEpitope, MostFreqFirstAATCR, MostFreqLastAATCR, MostFreqFirstAAEpitope, MostFreqLastAAEpitope, MeanNumberOfEpitopesBound, MeanNumberOfTCRsBound)
+Desc <- t(Desc)
+# Descriptive statistics
+sub <- subset(DataCleaned, TCRChain == "TRB")
+epi <- sub$peptide
+epi <- unique(epi)
+x <- c()
+for(e in epi){
+  ssub <- subset(sub, peptide == e)
+  ssub <- ssub$tcr
+  ssub <- unique(ssub)
+  x <- append(x, length(ssub))
+}
+mean(x)
+
+sub <- subset(DataCleaned, TCRChain == "TRB")
+tcr <- sub$tcr
+tcr <- unique(tcr)
+x <- c()
+for(t in tcr){
+  ssub <- subset(sub, tcr == t)
+  ssub <- ssub$peptide
+  ssub <- unique(ssub)
+  x <- append(x, length(ssub))
+}
+mean(x)
+```
+
+```{r}
+lengthTCR <- unique(DataCleaned$length_tcr)
+lengthEPI <- unique(DataCleaned$length_peptide)
+UnconditionalProbEpi <- c()
+for(i in 1:length(lengthEPI)){
+  sub <- subset(DataCleaned, length_peptide == lengthEPI[i])
+  UnconditionalProbEpi <- append(UnconditionalProbEpi, dim(sub)[1]/dim(DataCleaned)[1])
+}
+UnconditionalProbTCR <- c()
+for(i in 1:length(lengthTCR)){
+  sub <- subset(DataCleaned, length_tcr == lengthTCR[i])
+  UnconditionalProbTCR <- append(UnconditionalProbTCR, dim(sub)[1]/dim(DataCleaned)[1])
+}
+x <- lengthEPI
+y <- UnconditionalProbEpi
+d1 <- data.frame(x, y)
+d1 <- d1[order(x),]
+x <- lengthTCR
+y <- UnconditionalProbTCR
+d2 <- data.frame(x, y)
+d2 <- d2[order(x),]
+ConditionalProbEpi <- matrix(data = NA, nrow = length(lengthEPI), ncol = length(lengthTCR))
+rownames(ConditionalProbEpi) <- lengthEPI
+colnames(ConditionalProbEpi) <- lengthTCR
+for(i in 1:length(lengthEPI)){
+  for(j in 1:length(lengthTCR)){
+    sub <- subset(DataCleaned, length_tcr == lengthTCR[j])
+    ConditionalProbEpi[i,j] <- length(which(sub$length_peptide == lengthEPI[i]))/length(sub$length_peptide)
+  }
+}
+ConditionalProbTCR <- matrix(data = NA, nrow = length(lengthTCR), ncol = length(lengthEPI))
+rownames(ConditionalProbTCR) <- lengthTCR
+colnames(ConditionalProbTCR) <- lengthEPI
+for(i in 1:length(lengthTCR)){
+  for(j in 1:length(lengthEPI)){
+    sub <- subset(DataCleaned, length_peptide == lengthEPI[j])
+    ConditionalProbTCR[i,j] <- length(which(sub$length_tcr == lengthTCR[i]))/length(sub$length_tcr)
+  }
+}
+x <- lengthEPI
+y <- ConditionalProbEpi[,1]
+d <- data.frame(x, y)
+d <- d[order(x), ]
+plot(d1$x, d1$y,  xlab = "Length of Epitope", ylab = "P(Length of Epitope)", ylim = c(0, 1), type = "l", main = "Marginal")
+plot(d$x, d$y, pch = 20, col = 1, xlab = "Length of Epitope", ylab = "P(Length of Epitope)", ylim = c(0, 1), type = "l", main = "Length TCR | Length Epitope")
+for(i in 2:ncol(ConditionalProbEpi)){
+  x <- lengthEPI
+  y <- ConditionalProbEpi[,i]
+  d <- data.frame(x, y)
+  d <- d[order(x), ]
+  lines(d$x, d$y, pch = 20, col = i)
+}
+x <- lengthTCR
+y <- ConditionalProbTCR[,1]
+d <- data.frame(x, y)
+d <- d[order(x), ]
+plot(d2$x, d2$y,  xlab = "Length of TCR", ylab = "P(Length of TCR)", ylim = c(0, 1), type = "l", main = "Marginal")
+plot(d$x, d$y, pch = 20, col = 1, xlab = "Length of TCR", ylab = "P(Length of TCR)", ylim = c(0, 1), type = "l", main = "Length Epitope | Length TCR")
+for(i in 2:ncol(ConditionalProbTCR)){
+  x <- lengthTCR
+  y <- ConditionalProbTCR[,i]
+  d <- data.frame(x, y)
+  d <- d[order(x), ]
+  lines(d$x, d$y, pch = 20, col = i)
+}
+```
+
+```{r}
+AllEpitopes <- DataCouples$Sequence[DataCouples$Group=="Epitope"]
+MatrixAAPosTCRProb <- matrix(data = 0, nrow = 21, ncol = max(DataCleaned$length_tcr))
+rownames(MatrixAAPosTCRProb) <- c(aminoacids, "NoAANymore")
+cn <- c()
+for(i in 1:ncol(MatrixAAPosTCRProb)){
+  cn <- append(cn, paste("Pos", as.character(i), sep = ""))
+}
+colnames(MatrixAAPosTCRProb) <- cn
+GetMatrix <- function(EpiSequence){
+  sub <- subset(DataCleaned, peptide == EpiSequence)
+  TCRBetas <- sub$tcr[sub$TCRChain=="TRB"]
+  for(i in 1:ncol(MatrixAAPosTCRProb)){
+    letters <- substr(TCRBetas, i, i)
+    for(k in 1:length(letters)){
+      if(letters[k] %in% aminoacids){
+        x <- match(letters[k], aminoacids)
+        MatrixAAPosTCRProb[x,i] <- MatrixAAPosTCRProb[x,i] + 1
+      } else {
+        MatrixAAPosTCRProb[21,i] <- MatrixAAPosTCRProb[21,i] + 1
+      }
+    }
+    MatrixAAPosTCRProb[,i] <- MatrixAAPosTCRProb[,i]/length(TCRBetas) 
+  }
+  MatrixAAPosTCRProb <- round(MatrixAAPosTCRProb, digits = 2)
+  MatrixAAPosTCRProb <- t(MatrixAAPosTCRProb)
+  return(MatrixAAPosTCRProb)
+}
+View(GetMatrix(AllEpitopes[1]))
+heatmaply(GetMatrix(AllEpitopes[350]), Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red", midpoint = 0.5,limits = c(0, 1)), main = AllEpitopes[350])
+```
+
+```{r}
+AllEpitopes <- DataCouples$Sequence[DataCouples$Group=="Epitope"]
+ClusterMatrix <- matrix(data = NA, nrow = length(AllEpitopes), ncol = length(AllEpitopes))
+for(i in 1:nrow(ClusterMatrix)){
+  for(j in 1:ncol(ClusterMatrix)){
+    sub1 <- subset(DataCleaned, peptide == AllEpitopes[i])
+    sub1 <- sub1$tcr[sub1$TCRChain == "TRB"]
+    sub2 <- subset(DataCleaned, peptide == AllEpitopes[j])
+    sub2 <- sub2$tcr[sub2$TCRChain == "TRB"]
+    common <- intersect(sub1, sub2)
+    ClusterMatrix[i,j] <- length(common)
+  }
+}
+for(i in 1:ncol(ClusterMatrix)){
+  ClusterMatrix[i,i] <- 0
+}
+#heatmaply(ClusterMatrix, Colv = NA, Rowv = NA)
+###
+source <- c()
+target <- c()
+for(i in 1:length(AllEpitopes)){
+  x <- ClusterMatrix[i,]
+  x <- as.vector(x)
+  for(k in 1:length(x)){
+    if(x[k] != 0){
+      source <- append(source, AllEpitopes[i])
+      target <- append(target, AllEpitopes[k])
+    }
+  }
+}
+Id <- AllEpitopes
+Label <- AllEpitopes
+nodetype <- rep("Epitope", length(AllEpitopes))
+nodes <- data.frame(Id, Label, nodetype)
+Source <- source
+Target <- target
+edges <- data.frame(Source, Target)
+write.csv(nodes, file = "nodes2.csv", row.names = F)
+write.csv(edges, file = "edges2.csv", row.names = F)
+```
+
+```{r}
+positive <- subset(DataCleaned, TCRChain == "TRB")
+X11 <- positive$length_tcr
+X12 <- positive$charge_tcr
+X13 <- positive$insta_tcr
+X14 <- positive$hydro_tcr
+X15 <- positive$mm_tcr
+X16 <- positive$boman_tcr
+X17 <- positive$aindex_tcr
+X21 <- positive$length_peptide
+X22 <- positive$charge_peptide
+X23 <- positive$insta_peptide
+X24 <- positive$hydro_peptide
+X25 <- positive$mm_peptide
+X26 <- positive$boman_peptide
+X27 <- positive$aindex_peptide
+TCR <- positive$tcr
+Epi <- positive$peptide
+binding <- rep("Yes", length(TCR))
+#positive <- data.frame(TCR, Epi, X11, X12, X13, X14, X15, X21, X22, X23, X24, X25, binding)
+AllTCRB <- DataCouples$Sequence[DataCouples$Group == "TCRbeta"]
+AllEpitopes <- DataCouples$Sequence[DataCouples$Group == "Epitope"]
+NewCouples <- c()
+for(i in 1:40000){
+  tcr <- runif(1, min = 1, max = length(AllTCRB))
+  tcr <- AllTCRB[tcr]
+  epi <- runif(1, min = 1, max = length(AllEpitopes))
+  epi <- AllEpitopes[epi]
+  cpl <- paste(tcr, epi, sep = "-")
+  if(!(cpl %in% NewCouples) & !(cpl %in% DataCleaned$couple)){
+    NewCouples <- append(NewCouples, cpl)
+    x11 <- DataCouples$length[DataCouples$Sequence == tcr]
+    x12 <- DataCouples$charge[DataCouples$Sequence == tcr]
+    x13 <- DataCouples$insta[DataCouples$Sequence == tcr]
+    x14 <- DataCouples$hydro[DataCouples$Sequence == tcr]
+    x15 <- DataCouples$MolMass[DataCouples$Sequence == tcr]
+    x16 <- DataCouples$boman[DataCouples$Sequence == tcr]
+    x17 <- DataCouples$aindex[DataCouples$Sequence == tcr]
+    x21 <- DataCouples$length[DataCouples$Sequence == epi]
+    x22 <- DataCouples$charge[DataCouples$Sequence == epi]
+    x23 <- DataCouples$insta[DataCouples$Sequence == epi]
+    x24 <- DataCouples$hydro[DataCouples$Sequence == epi]
+    x25 <- DataCouples$MolMass[DataCouples$Sequence == epi]
+    x26 <- DataCouples$boman[DataCouples$Sequence == epi]
+    x27 <- DataCouples$aindex[DataCouples$Sequence == epi]
+    X11 <- append(X11, x11)
+    X12 <- append(X12, x12)
+    X13 <- append(X13, x13)
+    X14 <- append(X14, x14)
+    X15 <- append(X15, x15)
+    X16 <- append(X16, x16)
+    X17 <- append(X17, x17)
+    X21 <- append(X21, x21)
+    X22 <- append(X22, x22)
+    X23 <- append(X23, x23)
+    X24 <- append(X24, x24)
+    X25 <- append(X25, x25)
+    X26 <- append(X26, x26)
+    X27 <- append(X27, x27)
+    TCR <- append(TCR, tcr)
+    Epi <- append(Epi, epi)
+    binding <- append(binding, "No")
+  }
+}
+PosNeg <- data.frame(TCR, Epi, X11, X12, X13, X14, X15, X16, X17, X21, X22, X23, X24, X25, X26, X27, binding)
+PosNeg$binding <- as.factor(PosNeg$binding)
+set.seed(1234)
+rows <- sample(nrow(PosNeg))
+Shuffled <- PosNeg[rows,]
+```
+
+# Models fitted on the whole data
+
+```{r}
+model <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = Shuffled, family = binomial)
+summary(model)
+```
+
+```{r}
+dim(Shuffled)
+length(which(Shuffled$binding=="Yes"))
+length(which(Shuffled$binding=="No"))
+
+x <- unique(Shuffled$TCR)
+number_yes <- c()
+number_no <- c()
+for(t in x){
+  sub <- subset(Shuffled, TCR == t)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$Epi
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$Epi
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+
+x <- unique(Shuffled$Epi)
+number_yes <- c()
+number_no <- c()
+for(e in x){
+  sub <- subset(Shuffled, Epi == e)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$TCR
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$TCR
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+```
+
+
+# Couple split
+
+Regression tree 
+
+```{r}
+# Balance between train / test
+index <- c(1:nrow(Shuffled))
+train <- sample(index, 40000, replace = F)
+test_data <- Shuffled[-train,]
+train_data <- Shuffled[train, ]
+
+dim(test_data)
+length(which(test_data$binding=="Yes"))
+length(which(test_data$binding=="No"))
+
+x <- unique(test_data$TCR)
+number_yes <- c()
+number_no <- c()
+for(t in x){
+  sub <- subset(test_data, TCR == t)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$Epi
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$Epi
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+
+x <- unique(test_data$Epi)
+number_yes <- c()
+number_no <- c()
+for(e in x){
+  sub <- subset(test_data, Epi == e)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$TCR
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$TCR
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+```
+
+
+```{r}
+tree1 <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, Shuffled)
+summary(tree1)
+```
+
+```{r}
+index <- c(1:nrow(Shuffled))
+train <- sample(index, 40000, replace = F)
+test_data <- Shuffled[-train,]
+train_data <- Shuffled[train, ]
+train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+t <- table(test_tree, test_data$binding)
+t
+o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+sen <- t[2, 2]/(t[1, 2]+t[2, 2])
+spec <- t[1, 1]/(t[1, 1]+t[2, 1])
+o
+sen
+spec
+o <- ifelse(test_tree==test_data$binding, 1, 0)
+sum(o)/length(o)
+d <- data.frame(test_tree, test_data$binding)
+acc_yes <- subset(d, test_data.binding == "Yes")
+length(which(acc_yes$test_tree == "Yes"))/dim(acc_yes)[1]
+acc_yes <- subset(d, test_data.binding == "No")
+length(which(acc_yes$test_tree == "No"))/dim(acc_yes)[1]
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  index <- c(1:nrow(Shuffled))
+  train <- sample(index, 40000, replace = F)
+  test_data <- Shuffled[-train,]
+  train_data <- Shuffled[train, ]
+  train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+  test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+  t <- table(test_tree, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- test_tree
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Couple Split: Tree")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  index <- c(1:dim(Shuffled)[1])
+  index1 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index1)
+  index2 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index2)
+  index3 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index3)
+  index4 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index4)
+  index5 <- sample(index, 14669, replace = F)
+  for(k in 1:5){
+    if(k == 1){
+      test_data <- Shuffled[index1,]
+      train_data <- Shuffled[-index1, ]
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      test_data <- Shuffled[index2,]
+      train_data <- Shuffled[-index2, ]
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      test_data <- Shuffled[index3,]
+      train_data <- Shuffled[-index3, ]
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      test_data <- Shuffled[index4,]
+      train_data <- Shuffled[-index4, ]
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      test_data <- Shuffled[index5,]
+      train_data <- Shuffled[-index5, ]
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Couple Split: Tree")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+Random Forest
+
+```{r}
+rf <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = Shuffled, ntree = 50)
+importance(rf)
+```
+
+```{r}
+#rf <- randomForest(binding~X11+X12+X13+X14+X15+X21+X22+X23+X24+X25, data = Shuffled, ntree = 25)
+index <- c(1:nrow(Shuffled))
+train <- sample(index, 40000, replace = F)
+test_data <- Shuffled[-train,]
+train_data <- Shuffled[train, ]
+rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+t <- table(rf_test, test_data$binding)
+t
+o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+sen <- t[2, 2]/(t[1, 2]+t[2, 2])
+spec <- t[1, 1]/(t[1, 1]+t[2, 1])
+o
+sen
+spec
+o <- ifelse(rf_test == test_data$binding, 1, 0)
+sum(o)/length(o)
+d <- data.frame(rf_test, test_data$binding)
+acc_yes <- subset(d, test_data.binding == "Yes")
+length(which(acc_yes$rf_test == "Yes"))/dim(acc_yes)[1]
+acc_yes <- subset(d, test_data.binding == "No")
+length(which(acc_yes$rf_test == "No"))/dim(acc_yes)[1]
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  index <- c(1:nrow(Shuffled))
+  train <- sample(index, 40000, replace = F)
+  test_data <- Shuffled[-train,]
+  train_data <- Shuffled[train, ]
+  rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+  rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+  t <- table(rf_test, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- rf_test
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Couple Split: Random Forest")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  index <- c(1:dim(Shuffled)[1])
+  index1 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index1)
+  index2 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index2)
+  index3 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index3)
+  index4 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index4)
+  index5 <- sample(index, 14669, replace = F)
+  for(k in 1:5){
+    if(k == 1){
+      test_data <- Shuffled[index1,]
+      train_data <- Shuffled[-index1, ]
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      test_data <- Shuffled[index2,]
+      train_data <- Shuffled[-index2, ]
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      test_data <- Shuffled[index3,]
+      train_data <- Shuffled[-index3, ]
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      test_data <- Shuffled[index4,]
+      train_data <- Shuffled[-index4, ]
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      test_data <- Shuffled[index5,]
+      train_data <- Shuffled[-index5, ]
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Couple Split: Random Forest")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+Boosting
+
+```{r, warning = F, message = F, error = F}
+bst <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = Shuffled, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+index <- c(1:nrow(Shuffled))
+train <- sample(index, 40000, replace = F)
+test_data <- Shuffled[-train,]
+train_data <- Shuffled[train, ]
+bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+predicted <- bst_test
+true <- test_data$binding
+t <- table(predicted, true)
+(t[1, 1]+t[2, 2])/(t[1, 2]+t[2, 2]+t[1, 1]+t[2, 1])
+t[2, 2]/(t[1, 2]+t[2, 2])
+t[1, 1]/(t[1, 1]+t[2, 1])
+overall <- ifelse(true == predicted, 1, 0)
+sum(overall)/length(overall)
+acc <- data.frame(true, predicted, overall)
+acc_yes <- subset(acc, true == "Yes")
+length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+acc_no <- subset(acc, true == "No")
+length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+```
+
+```{r, warning = F, message = F, error = F}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  index <- c(1:nrow(Shuffled))
+  train <- sample(index, 40000, replace = F)
+  test_data <- Shuffled[-train,]
+  train_data <- Shuffled[train, ]
+  bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+  bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+  bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+  predicted <- bst_test
+  true <- test_data$binding
+  o <- ifelse(true == predicted, 1, 0)
+  overall <- append(overall, sum(o)/length(o))
+  acc <- data.frame(true, predicted, o)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]) 
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Couple Split: Boosting")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  index <- c(1:dim(Shuffled)[1])
+  index1 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index1)
+  index2 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index2)
+  index3 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index3)
+  index4 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index4)
+  index5 <- sample(index, 14669, replace = F)
+  for(k in 1:5){
+    if(k == 1){
+      test_data <- Shuffled[index1,]
+      train_data <- Shuffled[-index1, ]
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o1 <- ifelse(true == predicted, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      test_data <- Shuffled[index2,]
+      train_data <- Shuffled[-index2, ]
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o2 <- ifelse(true == predicted, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      test_data <- Shuffled[index3,]
+      train_data <- Shuffled[-index3, ]
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o3 <- ifelse(true == predicted, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      test_data <- Shuffled[index4,]
+      train_data <- Shuffled[-index4, ]
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o4 <- ifelse(true == predicted, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      test_data <- Shuffled[index5,]
+      train_data <- Shuffled[-index5, ]
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o5 <- ifelse(true == predicted, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Couple Split: Boosting")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+LogReg
+
+```{r}
+index <- c(1:dim(Shuffled)[1])
+index <- sample(index, 40000, replace = F)
+train <- Shuffled[index,]
+test <- Shuffled[-index,]
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+predict_test <- predict(logreg_train, test[,3:16], type = "response")
+predict_test <- ifelse(predict_test>0.5, 1, 0)
+true <- test$binding
+o <- ifelse(true == predict_test, 1, 0)
+sum(o)/length(o)
+z <- data.frame(true, predict_test)
+sens <- subset(z, true == 1)
+sens <- sum(sens$predict_test)/dim(sens)[1]
+sens
+spec <- subset(z, true == 0)
+spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+spec
+
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+index <- c(1:dim(Shuffled)[1])
+index <- sample(index, 40000, replace = F)
+train <- Shuffled[index,]
+test <- Shuffled[-index,]
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+for(boundry in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)){
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>boundry, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  overall <- append(overall, o)
+  sensitivity <- append(sensitivity, sens)
+  specificity <- append(specificity, spec)
+}
+boundry <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+plot(boundry, overall, type = "l", col = "red", xlab = "prediction > boundry", ylab = "Accuracy", main = "LogRegEvaluation", ylim = c(0, 1))
+lines(boundry, sensitivity, col = "blue")
+lines(boundry, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  index <- c(1:dim(Shuffled)[1])
+  index <- sample(index, 40000, replace = F)
+  train <- Shuffled[index,]
+  test <- Shuffled[-index,]
+  train$binding <- ifelse(train$binding == "Yes", 1, 0)
+  train$binding <- as.factor(train$binding)
+  test$binding <- ifelse(test$binding == "Yes", 1, 0)
+  test$binding <- as.factor(test$binding)
+  logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>0.5, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  overall <- append(overall, o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  sensitivity <- append(sensitivity, sens)
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  specificity <- append(specificity, spec)
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Couple Split: Log Reg")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  index <- c(1:dim(Shuffled)[1])
+  index1 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index1)
+  index2 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index2)
+  index3 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index3)
+  index4 <- sample(index, 16000, replace = F)
+  index <- setdiff(index, index4)
+  index5 <- sample(index, 14669, replace = F)
+  for(k in 1:5){
+    if(k == 1){
+      train <- Shuffled[index1,]
+      test <- Shuffled[-index1,]
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o1 <- ifelse(true == predict_test, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      z <- data.frame(true, predict_test)
+      sens1 <- subset(z, true == 1)
+      sens1 <- sum(sens1$predict_test)/dim(sens1)[1]
+      spec1 <- subset(z, true == 0)
+      spec1 <- length(which(spec1$predict_test == 0))/dim(spec1)[1]
+    } else if(k == 2){
+      train <- Shuffled[index2,]
+      test <- Shuffled[-index2,]
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o2 <- ifelse(true == predict_test, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      z <- data.frame(true, predict_test)
+      sens2 <- subset(z, true == 1)
+      sens2 <- sum(sens2$predict_test)/dim(sens2)[1]
+      spec2 <- subset(z, true == 0)
+      spec2 <- length(which(spec2$predict_test == 0))/dim(spec2)[1]
+    } else if(k == 3){
+      train <- Shuffled[index3,]
+      test <- Shuffled[-index3,]
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o3 <- ifelse(true == predict_test, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      z <- data.frame(true, predict_test)
+      sens3 <- subset(z, true == 1)
+      sens3 <- sum(sens3$predict_test)/dim(sens3)[1]
+      spec3 <- subset(z, true == 0)
+      spec3 <- length(which(spec3$predict_test == 0))/dim(spec3)[1]
+    } else if(k == 4){
+      train <- Shuffled[index4,]
+      test <- Shuffled[-index4,]
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o4 <- ifelse(true == predict_test, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      z <- data.frame(true, predict_test)
+      sens4 <- subset(z, true == 1)
+      sens4 <- sum(sens4$predict_test)/dim(sens4)[1]
+      spec4 <- subset(z, true == 0)
+      spec4 <- length(which(spec4$predict_test == 0))/dim(spec4)[1]
+    } else if(k == 5){
+      train <- Shuffled[index5,]
+      test <- Shuffled[-index5,]
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o5 <- ifelse(true == predict_test, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      z <- data.frame(true, predict_test)
+      sens5 <- subset(z, true == 1)
+      sens5 <- sum(sens5$predict_test)/dim(sens5)[1]
+      spec5 <- subset(z, true == 0)
+      spec5 <- length(which(spec5$predict_test == 0))/dim(spec5)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sens1, sens2, sens3, sens4, sens5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Couple Split: Log Reg")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+KNN
+
+```{r}
+index <- c(1:dim(Shuffled)[1])
+index <- sample(index, 40000, replace = F)
+train <- Shuffled[index,]
+test <- Shuffled[-index,]
+trainX <- train[,3:16]
+testX <- test[,3:16]
+trainY <- train[,17]
+set.seed(12345)
+knn <- knn(trainX, testX, trainY, k = 50)
+t <- table(knn, test[,17])
+t
+
+K <- c(10, 20, 30, 40, 50, 100, 200, 400)
+overall <- c()
+sen <- c()
+spec <- c()
+for(k in K){
+  o_k <- c()
+  sen_k <- c()
+  spec_k <- c()
+  for(i in 1:5){
+    index <- c(1:dim(Shuffled)[1])
+    index <- sample(index, 40000, replace = F)
+    train <- Shuffled[index,]
+    test <- Shuffled[-index,]
+    trainX <- train[,3:16]
+    testX <- test[,3:16]
+    trainY <- train[,17]
+    set.seed(12345)
+    knn <- knn(trainX, testX, trainY, k = k)
+    t <- table(knn, test[,17])
+    o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+    o_k <- append(o_k, o)
+    s <- t[2, 2]/(t[1, 2]+t[2, 2])
+    sen_k <- append(sen_k, s)
+    sp <- t[1, 1]/(t[1, 1]+t[2, 1])
+    spec_k <- append(spec_k, sp)
+  }
+  overall <- append(overall, mean(o_k))
+  sen <- append(sen, mean(sen_k))
+  spec <- append(spec, mean(spec_k))
+}
+plot(K, overall, type = "l", col = "red", xlab = "K", ylab = "Test Results", main = "Couple Split: KNN", ylim = c(0, 1))
+lines(K, sen, col = "blue")
+lines(K, spec, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+data.frame(K, overall, sen, spec)
+```
+
+# TCR Split
+
+```{r}
+# Balance between train / test
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+
+dim(test_data)
+length(which(test_data$binding=="Yes"))
+length(which(test_data$binding=="No"))
+
+x <- unique(test_data$TCR)
+number_yes <- c()
+number_no <- c()
+for(t in x){
+  sub <- subset(test_data, TCR == t)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$Epi
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$Epi
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+
+x <- unique(test_data$Epi)
+number_yes <- c()
+number_no <- c()
+for(e in x){
+  sub <- subset(test_data, Epi == e)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$TCR
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$TCR
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 100, replace = F)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+  train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+  test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+  t <- table(test_tree, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- test_tree
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "TCR Split: Tree")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "TCR Split: Tree")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+test <- subset(Shuffled, TCR %in% UnseenTCR)
+rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, ntree = 50)
+rf_test <- predict(rf_train, test[,3:16], type = "class")
+t <- table(rf_test, test$binding)
+t
+o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+o
+```
+
+```{r}
+tcrs_in_trian <- unique(train$TCR)
+positives <- c()
+negatives <- c()
+for(i in 1:length(tcrs_in_trian)){
+  sub <- subset(train, TCR == tcrs_in_trian[i])
+  positives <- append(positives, length(which(sub$binding == "Yes")))
+  negatives <- append(negatives, length(which(sub$binding == "No")))
+}
+mean(positives)
+mean(negatives)
+
+epis_in_trian <- unique(train$Epi)
+positives <- c()
+negatives <- c()
+for(i in 1:length(epis_in_trian)){
+  sub <- subset(train, Epi == epis_in_trian[i])
+  positives <- append(positives, length(which(sub$binding == "Yes")))
+  negatives <- append(negatives, length(which(sub$binding == "No")))
+}
+mean(positives)
+mean(negatives)
+```
+
+```{r}
+tcrs_in_test <- unique(test$TCR)
+positives <- c()
+negatives <- c()
+for(i in 1:length(tcrs_in_test)){
+  sub <- subset(test, TCR == tcrs_in_test[i])
+  positives <- append(positives, length(which(sub$binding == "Yes")))
+  negatives <- append(negatives, length(which(sub$binding == "No")))
+}
+mean(positives)
+mean(negatives)
+
+epis_in_test <- unique(test$Epi)
+positives <- c()
+negatives <- c()
+for(i in 1:length(epis_in_test)){
+  sub <- subset(test, Epi == epis_in_test[i])
+  positives <- append(positives, length(which(sub$binding == "Yes")))
+  negatives <- append(negatives, length(which(sub$binding == "No")))
+}
+mean(positives)
+mean(negatives)
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 100, replace = F)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+  rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+  rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+  t <- table(rf_test, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- rf_test
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "TCR Split: Random Forest")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "TCR Split: Random Forest")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r, warning = F, message = F, error = F}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 100, replace = F)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+  bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+  bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+  bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+  predicted <- bst_test
+  true <- test_data$binding
+  o <- ifelse(true == predicted, 1, 0)
+  overall <- append(overall, sum(o)/length(o))
+  acc <- data.frame(true, predicted, o)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]) 
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "TCR Split: Boosting")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r, warning = F, message = F, error = F}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o1 <- ifelse(true == predicted, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o2 <- ifelse(true == predicted, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o3 <- ifelse(true == predicted, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o4 <- ifelse(true == predicted, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o5 <- ifelse(true == predicted, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "TCR Split: Boosting")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+#UnseenTCR <- sample(AllTCRB, 100, replace = F)
+#train_data <- subset(Shuffled, !(TCR %in% UnseenTCR))
+#test_data <- subset(Shuffled, TCR %in% UnseenTCR)
+
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+test <- subset(Shuffled, TCR %in% UnseenTCR)
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+predict_test <- predict(logreg_train, test[,3:16], type = "response")
+predict_test <- ifelse(predict_test>0.5, 1, 0)
+true <- test$binding
+o <- ifelse(true == predict_test, 1, 0)
+sum(o)/length(o)
+z <- data.frame(true, predict_test)
+sens <- subset(z, true == 1)
+sens <- sum(sens$predict_test)/dim(sens)[1]
+sens
+spec <- subset(z, true == 0)
+spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+spec
+
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+test <- subset(Shuffled, TCR %in% UnseenTCR)
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+for(boundry in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)){
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>boundry, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  overall <- append(overall, o)
+  sensitivity <- append(sensitivity, sens)
+  specificity <- append(specificity, spec)
+}
+boundry <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+plot(boundry, overall, type = "l", col = "red", xlab = "prediction > boundry", ylab = "Accuracy", main = "LogRegEvaluation", ylim = c(0, 1))
+lines(boundry, sensitivity, col = "blue")
+lines(boundry, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 100, replace = F)
+  train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+  test <- subset(Shuffled, TCR %in% UnseenTCR)
+  train$binding <- ifelse(train$binding == "Yes", 1, 0)
+  train$binding <- as.factor(train$binding)
+  test$binding <- ifelse(test$binding == "Yes", 1, 0)
+  test$binding <- as.factor(test$binding)
+  logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>0.5, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  overall <- append(overall, o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  sensitivity <- append(sensitivity, sens)
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  specificity <- append(specificity, spec)
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "TCR Split: Log Reg")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test <- subset(Shuffled, TCR %in% UnseenTCR)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o1 <- ifelse(true == predict_test, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      z <- data.frame(true, predict_test)
+      sens1 <- subset(z, true == 1)
+      sens1 <- sum(sens1$predict_test)/dim(sens1)[1]
+      spec1 <- subset(z, true == 0)
+      spec1 <- length(which(spec1$predict_test == 0))/dim(spec1)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test <- subset(Shuffled, TCR %in% UnseenTCR)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o2 <- ifelse(true == predict_test, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      z <- data.frame(true, predict_test)
+      sens2 <- subset(z, true == 1)
+      sens2 <- sum(sens2$predict_test)/dim(sens2)[1]
+      spec2 <- subset(z, true == 0)
+      spec2 <- length(which(spec2$predict_test == 0))/dim(spec2)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test <- subset(Shuffled, TCR %in% UnseenTCR)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o3 <- ifelse(true == predict_test, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      z <- data.frame(true, predict_test)
+      sens3 <- subset(z, true == 1)
+      sens3 <- sum(sens3$predict_test)/dim(sens3)[1]
+      spec3 <- subset(z, true == 0)
+      spec3 <- length(which(spec3$predict_test == 0))/dim(spec3)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test <- subset(Shuffled, TCR %in% UnseenTCR)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o4 <- ifelse(true == predict_test, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      z <- data.frame(true, predict_test)
+      sens4 <- subset(z, true == 1)
+      sens4 <- sum(sens4$predict_test)/dim(sens4)[1]
+      spec4 <- subset(z, true == 0)
+      spec4 <- length(which(spec4$predict_test == 0))/dim(spec4)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 100, replace = F)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR))
+      test <- subset(Shuffled, TCR %in% UnseenTCR)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o5 <- ifelse(true == predict_test, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      z <- data.frame(true, predict_test)
+      sens5 <- subset(z, true == 1)
+      sens5 <- sum(sens5$predict_test)/dim(sens5)[1]
+      spec5 <- subset(z, true == 0)
+      spec5 <- length(which(spec5$predict_test == 0))/dim(spec5)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sens1, sens2, sens3, sens4, sens5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "TCR Split: Log Reg")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+Filtered <- subset(Shuffled, !(TCR %in% UnseenTCR))
+UnseenTCR <- subset(Shuffled, TCR %in% UnseenTCR)
+trainX <- Filtered[,3:16]
+testX <- UnseenTCR[,3:16]
+trainY <- Filtered[,17]
+set.seed(12345)
+knn <- knn(trainX, testX, trainY, k = 450)
+t <- table(knn, UnseenTCR[,17])
+#t
+K <- c(10, 20, 30, 40, 50, 100, 200, 400)
+overall <- c()
+sen <- c()
+spec <- c()
+for(k in K){
+  o_k <- c()
+  sen_k <- c()
+  spec_k <- c()
+  for(i in 1:5){
+    UnseenTCR <- sample(AllTCRB, 100, replace = F)
+    Filtered <- subset(Shuffled, !(TCR %in% UnseenTCR))
+    UnseenTCR <- subset(Shuffled, TCR %in% UnseenTCR)
+    trainX <- Filtered[,3:16]
+    testX <- UnseenTCR[,3:16]
+    trainY <- Filtered[,17]
+    set.seed(12345)
+    knn <- knn(trainX, testX, trainY, k = k)
+    t <- table(knn, UnseenTCR[,17])
+    o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+    o_k <- append(o_k, o)
+    s <- t[2, 2]/(t[1, 2]+t[2, 2])
+    sen_k <- append(sen_k, s)
+    sp <- t[1, 1]/(t[1, 1]+t[2, 1])
+    spec_k <- append(spec_k, sp)
+  }
+  overall <- append(overall, mean(o_k))
+  sen <- append(sen, mean(sen_k))
+  spec <- append(spec, mean(spec_k))
+}
+plot(K, overall, type = "l", col = "red", xlab = "K", ylab = "Test Results", main = "TCR Split: KNN", ylim = c(0, 1))
+lines(K, sen, col = "blue")
+lines(K, spec, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+z <- data.frame(K, overall, sen, spec)
+z
+```
+
+# Full split
+
+```{r}
+# Balance between train / test
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+
+dim(test_data)
+length(which(test_data$binding=="Yes"))
+length(which(test_data$binding=="No"))
+
+x <- unique(test_data$TCR)
+number_yes <- c()
+number_no <- c()
+for(t in x){
+  sub <- subset(test_data, TCR == t)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$Epi
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$Epi
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+
+x <- unique(test_data$Epi)
+number_yes <- c()
+number_no <- c()
+for(e in x){
+  sub <- subset(test_data, Epi == e)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$TCR
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$TCR
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+```
+
+```{r}
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+dim(Shuffled)
+dim(train_data)
+dim(test_data)
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 200, replace = F)
+  UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+  train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+  test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+  t <- table(test_tree, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- test_tree
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Full Split: Tree")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Full Split: Tree")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 200, replace = F)
+  UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+  rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+  rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+  t <- table(rf_test, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- rf_test
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Full Split: Random Forest")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Full Split: Random Forest")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 200, replace = F)
+  UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+  test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+  train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+  bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+  bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+  bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+  predicted <- bst_test
+  true <- test_data$binding
+  o <- ifelse(true == predicted, 1, 0)
+  overall <- append(overall, sum(o)/length(o))
+  acc <- data.frame(true, predicted, o)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]) 
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Full Split: Boosting")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o1 <- ifelse(true == predicted, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o2 <- ifelse(true == predicted, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o3 <- ifelse(true == predicted, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o4 <- ifelse(true == predicted, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o5 <- ifelse(true == predicted, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Full Split: Boosting")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+#UnseenTCR <- sample(AllTCRB, 200, replace = F)
+#UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+#test_data <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+#train_data <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+predict_test <- predict(logreg_train, test[,3:16], type = "response")
+predict_test <- ifelse(predict_test>0.5, 1, 0)
+true <- test$binding
+o <- ifelse(true == predict_test, 1, 0)
+sum(o)/length(o)
+z <- data.frame(true, predict_test)
+sens <- subset(z, true == 1)
+sens <- sum(sens$predict_test)/dim(sens)[1]
+sens
+spec <- subset(z, true == 0)
+spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+spec
+
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+for(boundry in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)){
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>boundry, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  overall <- append(overall, o)
+  sensitivity <- append(sensitivity, sens)
+  specificity <- append(specificity, spec)
+}
+boundry <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+plot(boundry, overall, type = "l", col = "red", xlab = "prediction > boundry", ylab = "Accuracy", main = "LogRegEvaluation", ylim = c(0, 1))
+lines(boundry, sensitivity, col = "blue")
+lines(boundry, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenTCR <- sample(AllTCRB, 200, replace = F)
+  UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+  test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+  train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+  train$binding <- ifelse(train$binding == "Yes", 1, 0)
+  train$binding <- as.factor(train$binding)
+  test$binding <- ifelse(test$binding == "Yes", 1, 0)
+  test$binding <- as.factor(test$binding)
+  logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>0.5, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  overall <- append(overall, o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  sensitivity <- append(sensitivity, sens)
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  specificity <- append(specificity, spec)
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Full Split: Log Reg")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o1 <- ifelse(true == predict_test, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      z <- data.frame(true, predict_test)
+      sens1 <- subset(z, true == 1)
+      sens1 <- sum(sens1$predict_test)/dim(sens1)[1]
+      spec1 <- subset(z, true == 0)
+      spec1 <- length(which(spec1$predict_test == 0))/dim(spec1)[1]
+    } else if(k == 2){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o2 <- ifelse(true == predict_test, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      z <- data.frame(true, predict_test)
+      sens2 <- subset(z, true == 1)
+      sens2 <- sum(sens2$predict_test)/dim(sens2)[1]
+      spec2 <- subset(z, true == 0)
+      spec2 <- length(which(spec2$predict_test == 0))/dim(spec2)[1]
+    } else if(k == 3){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o3 <- ifelse(true == predict_test, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      z <- data.frame(true, predict_test)
+      sens3 <- subset(z, true == 1)
+      sens3 <- sum(sens3$predict_test)/dim(sens3)[1]
+      spec3 <- subset(z, true == 0)
+      spec3 <- length(which(spec3$predict_test == 0))/dim(spec3)[1]
+    } else if(k == 4){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o4 <- ifelse(true == predict_test, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      z <- data.frame(true, predict_test)
+      sens4 <- subset(z, true == 1)
+      sens4 <- sum(sens4$predict_test)/dim(sens4)[1]
+      spec4 <- subset(z, true == 0)
+      spec4 <- length(which(spec4$predict_test == 0))/dim(spec4)[1]
+    } else if(k == 5){
+      UnseenTCR <- sample(AllTCRB, 200, replace = F)
+      UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+      test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+      train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o5 <- ifelse(true == predict_test, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      z <- data.frame(true, predict_test)
+      sens5 <- subset(z, true == 1)
+      sens5 <- sum(sens5$predict_test)/dim(sens5)[1]
+      spec5 <- subset(z, true == 0)
+      spec5 <- length(which(spec5$predict_test == 0))/dim(spec5)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sens1, sens2, sens3, sens4, sens5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Full Split: Log Reg")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+trainX <- train[,3:16]
+testX <- test[,3:16]
+trainY <- train[,17]
+set.seed(12345)
+knn <- knn(trainX, testX, trainY, k = 450)
+t <- table(knn, test[,17])
+t
+K <- c(10, 20, 30, 40, 50, 100, 200, 400)
+overall <- c()
+sen <- c()
+spec <- c()
+for(k in K){
+  o_k <- c()
+  sen_k <- c()
+  spec_k <- c()
+  for(i in 1:5){
+    UnseenTCR <- sample(AllTCRB, 200, replace = F)
+    UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+    test <- subset(Shuffled, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+    train <- subset(Shuffled, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+    trainX <- train[,3:16]
+    testX <- test[,3:16]
+    trainY <- train[,17]
+    set.seed(12345)
+    knn <- knn(trainX, testX, trainY, k = k)
+    t <- table(knn, test[,17])
+    o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+    o_k <- append(o_k, o)
+    s <- t[2, 2]/(t[1, 2]+t[2, 2])
+    sen_k <- append(sen_k, s)
+    sp <- t[1, 1]/(t[1, 1]+t[2, 1])
+    spec_k <- append(spec_k, sp)
+  }
+  overall <- append(overall, mean(o_k))
+  sen <- append(sen, mean(sen_k))
+  spec <- append(spec, mean(spec_k))
+}
+plot(K, overall, type = "l", col = "red", xlab = "K", ylab = "Test Results", main = "Full Split: KNN", ylim = c(0, 1))
+lines(K, sen, col = "blue")
+lines(K, spec, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+data.frame(K, overall, sen, spec)
+```
+
+# Epitope Split
+
+```{r}
+# Balance between train / test
+UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+
+dim(test_data)
+length(which(test_data$binding=="Yes"))
+length(which(test_data$binding=="No"))
+
+x <- unique(test_data$TCR)
+number_yes <- c()
+number_no <- c()
+for(t in x){
+  sub <- subset(test_data, TCR == t)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$Epi
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$Epi
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+
+x <- unique(test_data$Epi)
+number_yes <- c()
+number_no <- c()
+for(e in x){
+  sub <- subset(test_data, Epi == e)
+  sub1 <- subset(sub, binding == "Yes")
+  sub1 <- sub1$TCR
+  sub1 <- unique(sub1)
+  sub1 <- length(sub1)
+  number_yes <- append(number_yes, sub1)
+  sub2 <- subset(sub, binding == "No")
+  sub2 <- sub2$TCR
+  sub2 <- unique(sub2)
+  sub2 <- length(sub2)
+  number_no <- append(number_no, sub2)
+}
+mean(number_yes)
+mean(number_no)
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+  train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+  test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+  train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+  test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+  t <- table(test_tree, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- test_tree
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Epitope Split: Tree")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      train_tree <- tree(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, train_data)
+      test_tree <- predict(train_tree, test_data[,3:16], type = "class")
+      t <- table(test_tree, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- test_tree
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Epitope Split: Tree")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+  train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+  test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+  rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+  rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+  t <- table(rf_test, test_data$binding)
+  o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+  overall <- append(overall, o)
+  true <- test_data$binding
+  predicted <- rf_test
+  acc <- data.frame(true, predicted)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1])
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0, 1), xlab = "Validation", ylab = "Test Results", main = "Epitope Split: Random Forest")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o1 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o2 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o3 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o4 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      rf_train <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, ntree = 50)
+      rf_test <- predict(rf_train, test_data[,3:16], type = "class")
+      t <- table(rf_test, test_data$binding)
+      o5 <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+      true <- test_data$binding
+      predicted <- rf_test
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Epitope Split: Random Forest")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+  train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+  test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+  bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+  bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+  bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+  predicted <- bst_test
+  true <- test_data$binding
+  o <- ifelse(true == predicted, 1, 0)
+  overall <- append(overall, sum(o)/length(o))
+  acc <- data.frame(true, predicted, o)
+  acc_yes <- subset(acc, true == "Yes")
+  sensitivity <- append(sensitivity, length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1]) 
+  acc_no <- subset(acc, true == "No")
+  specificity <- append(specificity, length(which(acc_no$predicted == "No"))/dim(acc_no)[1])
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Epitope Split: Boosting")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o1 <- ifelse(true == predicted, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen1 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec1 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 2){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o2 <- ifelse(true == predicted, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen2 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec2 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 3){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o3 <- ifelse(true == predicted, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen3 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec3 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 4){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o4 <- ifelse(true == predicted, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen4 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec4 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    } else if(k == 5){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train_data <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test_data <- subset(Shuffled, Epi %in% UnseenEpi)
+      bst_train <- gbm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train_data, distribution = "multinomial", n.trees = 25, interaction.depth = 5)
+      bst_test <- predict.gbm(bst_train, test_data[,3:16], type = "response", n.trees = 25)
+      bst_test <- colnames(bst_test)[apply(bst_test, 1, which.max)]
+      predicted <- bst_test
+      true <- test_data$binding
+      o5 <- ifelse(true == predicted, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      acc <- data.frame(true, predicted)
+      acc_yes <- subset(acc, true == "Yes")
+      sen5 <- length(which(acc_yes$predicted == "Yes"))/dim(acc_yes)[1] 
+      acc_no <- subset(acc, true == "No")
+      spec5 <- length(which(acc_no$predicted == "No"))/dim(acc_no)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sen1, sen2, sen3, sen4, sen5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Epitope Split: Boosting")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+test <- subset(Shuffled, Epi %in% UnseenEpi)
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+predict_test <- predict(logreg_train, test[,3:16], type = "response")
+predict_test <- ifelse(predict_test>0.5, 1, 0)
+true <- test$binding
+o <- ifelse(true == predict_test, 1, 0)
+sum(o)/length(o)
+z <- data.frame(true, predict_test)
+sens <- subset(z, true == 1)
+sens <- sum(sens$predict_test)/dim(sens)[1]
+sens
+spec <- subset(z, true == 0)
+spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+spec
+
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+test <- subset(Shuffled, Epi %in% UnseenEpi)
+train$binding <- ifelse(train$binding == "Yes", 1, 0)
+train$binding <- as.factor(train$binding)
+test$binding <- ifelse(test$binding == "Yes", 1, 0)
+test$binding <- as.factor(test$binding)
+logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+for(boundry in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)){
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>boundry, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  overall <- append(overall, o)
+  sensitivity <- append(sensitivity, sens)
+  specificity <- append(specificity, spec)
+}
+boundry <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+plot(boundry, overall, type = "l", col = "red", xlab = "prediction > boundry", ylab = "Accuracy", main = "LogRegEvaluation", ylim = c(0, 1))
+lines(boundry, sensitivity, col = "blue")
+lines(boundry, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+validation <- c(1:20)
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:20){
+  UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+  train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+  test <- subset(Shuffled, Epi %in% UnseenEpi)
+  train$binding <- ifelse(train$binding == "Yes", 1, 0)
+  train$binding <- as.factor(train$binding)
+  test$binding <- ifelse(test$binding == "Yes", 1, 0)
+  test$binding <- as.factor(test$binding)
+  logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+  predict_test <- predict(logreg_train, test[,3:16], type = "response")
+  predict_test <- ifelse(predict_test>0.5, 1, 0)
+  true <- test$binding
+  o <- ifelse(true == predict_test, 1, 0)
+  o <- sum(o)/length(o)
+  overall <- append(overall, o)
+  z <- data.frame(true, predict_test)
+  sens <- subset(z, true == 1)
+  sens <- sum(sens$predict_test)/dim(sens)[1]
+  sensitivity <- append(sensitivity, sens)
+  spec <- subset(z, true == 0)
+  spec <- length(which(spec$predict_test == 0))/dim(spec)[1]
+  specificity <- append(specificity, spec)
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(validation, overall, type = "l", col = "red", ylim = c(0,1), xlab = "Validation", ylab = "Test Results", main = "Epitope Split: Log Reg")
+lines(validation, sensitivity, col = "blue")
+lines(validation, specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+# 5 fold CV
+overall <- c()
+sensitivity <- c()
+specificity <- c()
+for(i in 1:10){
+  for(k in 1:5){
+    if(k == 1){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test <- subset(Shuffled, Epi %in% UnseenEpi)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o1 <- ifelse(true == predict_test, 1, 0)
+      o1 <- sum(o1)/length(o1)
+      z <- data.frame(true, predict_test)
+      sens1 <- subset(z, true == 1)
+      sens1 <- sum(sens1$predict_test)/dim(sens1)[1]
+      spec1 <- subset(z, true == 0)
+      spec1 <- length(which(spec1$predict_test == 0))/dim(spec1)[1]
+    } else if(k == 2){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test <- subset(Shuffled, Epi %in% UnseenEpi)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o2 <- ifelse(true == predict_test, 1, 0)
+      o2 <- sum(o2)/length(o2)
+      z <- data.frame(true, predict_test)
+      sens2 <- subset(z, true == 1)
+      sens2 <- sum(sens2$predict_test)/dim(sens2)[1]
+      spec2 <- subset(z, true == 0)
+      spec2 <- length(which(spec2$predict_test == 0))/dim(spec2)[1]
+    } else if(k == 3){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test <- subset(Shuffled, Epi %in% UnseenEpi)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o3 <- ifelse(true == predict_test, 1, 0)
+      o3 <- sum(o3)/length(o3)
+      z <- data.frame(true, predict_test)
+      sens3 <- subset(z, true == 1)
+      sens3 <- sum(sens3$predict_test)/dim(sens3)[1]
+      spec3 <- subset(z, true == 0)
+      spec3 <- length(which(spec3$predict_test == 0))/dim(spec3)[1]
+    } else if(k == 4){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test <- subset(Shuffled, Epi %in% UnseenEpi)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o4 <- ifelse(true == predict_test, 1, 0)
+      o4 <- sum(o4)/length(o4)
+      z <- data.frame(true, predict_test)
+      sens4 <- subset(z, true == 1)
+      sens4 <- sum(sens4$predict_test)/dim(sens4)[1]
+      spec4 <- subset(z, true == 0)
+      spec4 <- length(which(spec4$predict_test == 0))/dim(spec4)[1]
+    } else if(k == 5){
+      UnseenEpi <- sample(AllEpitopes, 50, replace = F)
+      train <- subset(Shuffled, !(Epi %in% UnseenEpi))
+      test <- subset(Shuffled, Epi %in% UnseenEpi)
+      train$binding <- ifelse(train$binding == "Yes", 1, 0)
+      train$binding <- as.factor(train$binding)
+      test$binding <- ifelse(test$binding == "Yes", 1, 0)
+      test$binding <- as.factor(test$binding)
+      logreg_train <- glm(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = train, family = binomial)
+      predict_test <- predict(logreg_train, test[,3:16], type = "response")
+      predict_test <- ifelse(predict_test>0.5, 1, 0)
+      true <- test$binding
+      o5 <- ifelse(true == predict_test, 1, 0)
+      o5 <- sum(o5)/length(o5)
+      z <- data.frame(true, predict_test)
+      sens5 <- subset(z, true == 1)
+      sens5 <- sum(sens5$predict_test)/dim(sens5)[1]
+      spec5 <- subset(z, true == 0)
+      spec5 <- length(which(spec5$predict_test == 0))/dim(spec5)[1]
+    }
+  }
+  overall <- append(overall, mean(o1, o2, o3, o4, o5))
+  sensitivity <- append(sensitivity, mean(sens1, sens2, sens3, sens4, sens5))
+  specificity <- append(specificity, mean(spec1, spec2, spec3, spec4, spec5))
+}
+mean(overall); mean(sensitivity); mean(specificity)
+plot(c(1:10), overall, type = "l", col = "red", ylim = c(0, 1), xlab = "5 Fold CV", ylab = "Test Results", main = "Epitope Split: Log Reg")
+lines(c(1:10), sensitivity, col = "blue")
+lines(c(1:10), specificity, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+```
+
+```{r}
+UnseenEpitopes <- sample(AllEpitopes, 100, replace = F)
+Filtered <- subset(Shuffled, !(Epi %in% UnseenEpitopes))
+UnseenEpitopes <- subset(Shuffled, Epi %in% UnseenEpitopes)
+trainX <- Filtered[,3:16]
+testX <- UnseenEpitopes[,3:16]
+trainY <- Filtered[,17]
+set.seed(12345)
+knn <- knn(trainX, testX, trainY, k = 450)
+t <- table(knn, UnseenEpitopes[,17])
+t
+K <- c(10, 20, 30, 40, 50, 100, 200, 400)
+overall <- c()
+sen <- c()
+spec <- c()
+for(k in K){
+  o_k <- c()
+  sen_k <- c()
+  spec_k <- c()
+  for(i in 1:5){
+    UnseenEpi <- sample(AllEpitopes, 100, replace = F)
+    Filtered <- subset(Shuffled, !(Epi %in% UnseenEpi))
+    UnseenEpi <- subset(Shuffled, Epi %in% UnseenEpi)
+    trainX <- Filtered[,3:16]
+    testX <- UnseenEpi[,3:16]
+    trainY <- Filtered[,17]
+    set.seed(12345)
+    knn <- knn(trainX, testX, trainY, k = k)
+    t <- table(knn, UnseenEpi[,17])
+    o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+    o_k <- append(o_k, o)
+    s <- t[2, 2]/(t[1, 2]+t[2, 2])
+    sen_k <- append(sen_k, s)
+    sp <- t[1, 1]/(t[1, 1]+t[2, 1])
+    spec_k <- append(spec_k, sp)
+  }
+  overall <- append(overall, mean(o_k))
+  sen <- append(sen, mean(sen_k))
+  spec <- append(spec, mean(spec_k))
+}
+plot(K, overall, type = "l", col = "red", xlab = "K", ylab = "Test Results", main = "Epitope Split: KNN", ylim = c(0, 1))
+lines(K, sen, col = "blue")
+lines(K, spec, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+data.frame(K, overall, sen, spec)
+```
+
+```{r}
+K <- c(400, 410, 420, 430, 440, 450, 460, 470, 480, 490)
+overall <- c()
+sen <- c()
+spec <- c()
+for(k in K){
+  o_k <- c()
+  sen_k <- c()
+  spec_k <- c()
+  for(i in 1:5){
+    UnseenEpi <- sample(AllEpitopes, 100, replace = F)
+    Filtered <- subset(Shuffled, !(Epi %in% UnseenEpi))
+    UnseenEpi <- subset(Shuffled, Epi %in% UnseenEpi)
+    trainX <- Filtered[,3:16]
+    testX <- UnseenEpi[,3:16]
+    trainY <- Filtered[,17]
+    set.seed(12345)
+    knn <- knn(trainX, testX, trainY, k = k)
+    t <- table(knn, UnseenEpi[,17])
+    o <- (t[1, 1]+t[2, 2])/(t[1, 1]+t[1, 2]+t[2, 1]+t[2, 2])
+    o_k <- append(o_k, o)
+    s <- t[2, 2]/(t[1, 2]+t[2, 2])
+    sen_k <- append(sen_k, s)
+    sp <- t[1, 1]/(t[1, 1]+t[2, 1])
+    spec_k <- append(spec_k, sp)
+  }
+  overall <- append(overall, mean(o_k))
+  sen <- append(sen, mean(sen_k))
+  spec <- append(spec, mean(spec_k))
+}
+plot(K, overall, type = "l", col = "red", xlab = "K", ylab = "Test Results", main = "Epitope Split: KNN", ylim = c(0, 1))
+lines(K, sen, col = "blue")
+lines(K, spec, col = "green")
+legend(x="bottomleft", legend=c("Overall Acc.", "Sens.", "Spec."), col=c("red", "blue", "green"), lty=c(1,1))
+data.frame(K, overall, sen, spec)
+```
+
+# Sequence prediction
+
+Given the sequence of the epitope, what should the sequence of the TCRB be?
+
+```{r}
+SequencePrediction <- subset(Shuffled, binding == "Yes")
+for(i in 1:dim(SequencePrediction)[1]){
+  tcr <- SequencePrediction$TCR[i]
+  epi <- SequencePrediction$Epi[i]
+  tcr <- strsplit(tcr, split = "")[[1]]
+  epi <- strsplit(epi, split = "")[[1]]
+  while(length(tcr) != 38){
+    tcr <- append(tcr, "X")
+  }
+  while(length(epi) != 20){
+    epi <- append(epi, "X")
+  }
+  tcr <- paste(tcr, collapse = "")
+  epi <- paste(epi, collapse = "")
+  SequencePrediction$TCR[i] <- tcr
+  SequencePrediction$Epi[i] <- epi
+}
+```
+
+```{r}
+interaction_map <- matrix(data = 0, nrow = 20, ncol = 38)
+for(i in 1:20){
+  position_i_epitope <- substr(SequencePrediction$Epi, i, i)
+  position_i_epitope <- unique(position_i_epitope)
+  for(aa in position_i_epitope){
+    sub <- subset(SequencePrediction, substr(Epi, i, i) == aa)
+    for(j in 1:38){
+      position_j_tcr <- substr(sub$TCR, j, j)
+      position_j_tcr <- unique(position_j_tcr)
+      interaction_map[i,j] <- interaction_map[i,j] + length(position_j_tcr)
+    }
+  }
+  interaction_map[i,] <- interaction_map[i,] / length(position_i_epitope)
+}
+heatmaply(interaction_map, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red"))
+```
+
+```{r}
+epis <- SequencePrediction$Epi
+epis <- unique(epis)
+epis_structure <- matrix(data = 0, nrow = 20, ncol = 21)
+colnames(epis_structure) <- c(aminoacids, "X")
+for(epi in epis){
+  epi_list <- strsplit(epi, split = "")[[1]]
+  for(i in 1:length(epi_list)){
+    x <- epi_list[i]
+    if(x %in% aminoacids){
+      x <- match(x, aminoacids)
+      epis_structure[i,x] <- epis_structure[i,x] + 1
+    } else {
+      epis_structure[i, 21] <- epis_structure[i,21] + 1
+    }
+  }
+}
+for(i in 1:nrow(epis_structure)){
+  for(j in 1:ncol(epis_structure)){
+    epis_structure[i,j] <- epis_structure[i,j] / length(epis)
+  }
+}
+heatmaply(epis_structure, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red", midpoint = 0.5))
+
+tcrs <- SequencePrediction$TCR
+tcrs <- unique(tcrs)
+tcrs_structure <- matrix(data = 0, nrow = 38, ncol = 21)
+colnames(tcrs_structure) <- c(aminoacids, "X")
+for(tcr in tcrs){
+  tcr_list <- strsplit(tcr, split = "")[[1]]
+  for(i in 1:length(tcr_list)){
+    x <- tcr_list[i]
+    if(x %in% aminoacids){
+      x <- match(x, aminoacids)
+      tcrs_structure[i,x] <- tcrs_structure[i,x] + 1
+    } else {
+      tcrs_structure[i, 21] <- tcrs_structure[i,21] + 1
+    }
+  }
+}
+for(i in 1:nrow(tcrs_structure)){
+  for(j in 1:ncol(tcrs_structure)){
+    tcrs_structure[i,j] <- tcrs_structure[i,j] / length(tcrs)
+  }
+}
+heatmaply(tcrs_structure, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red", midpoint = 0.5))
+```
+
+```{r}
+SequencePrediction2 <- matrix(data = NA, nrow = dim(SequencePrediction)[1], ncol = 74)
+for(i in 1:dim(SequencePrediction)[1]){
+  x <- SequencePrediction$TCR[i]
+  tcrr <- x
+  x <- strsplit(x, split = "")[[1]]
+  y <- SequencePrediction$Epi[i]
+  epii <- y
+  y <- strsplit(y, split = "")[[1]]
+  SequencePrediction2[i,] <- c(x, y, epii, tcrr, rep(NA, 14))
+}
+SequencePrediction2 <- data.frame(SequencePrediction2)
+for(i in 1:58){
+  SequencePrediction2[,i] <- as.factor(SequencePrediction2[,i])
+}
+for(i in 1:length(SequencePrediction2$X59)){
+  x <- SequencePrediction2$X59[i]
+  x <- strsplit(x, split = "")[[1]]
+  if("X" %in% x){
+    j <- match("X", x)
+    x <- x[-c(j:length(x))]
+  }
+  x <- paste(x, collapse = "")
+  SequencePrediction2$X59[i] <- x
+}
+for(i in 1:length(SequencePrediction2$X60)){
+  x <- SequencePrediction2$X60[i]
+  x <- strsplit(x, split = "")[[1]]
+  if("X" %in% x){
+    j <- match("X", x)
+    x <- x[-c(j:length(x))]
+  }
+  x <- paste(x, collapse = "")
+  SequencePrediction2$X60[i] <- x
+}
+for(i in 1:length(SequencePrediction2$X60)){
+  x <- SequencePrediction2$X60[i]
+  subx <- subset(DataCouples, Sequence == x)
+  SequencePrediction2$X61[i] <- subx$length[1]
+  SequencePrediction2$X62[i] <- subx$charge[1]
+  SequencePrediction2$X63[i] <- subx$insta[1]
+  SequencePrediction2$X64[i] <- subx$hydro[1]
+  SequencePrediction2$X65[i] <- subx$MolMass[1]
+  SequencePrediction2$X66[i] <- subx$boman[1]
+  SequencePrediction2$X67[i] <- subx$aindex[1]
+  y <- SequencePrediction2$X59[i]
+  suby <- subset(DataCouples, Sequence == y)
+  SequencePrediction2$X68[i] <- suby$length[1]
+  SequencePrediction2$X69[i] <- suby$charge[1]
+  SequencePrediction2$X70[i] <- suby$insta[1]
+  SequencePrediction2$X71[i] <- suby$hydro[1]
+  SequencePrediction2$X72[i] <- suby$MolMass[1]
+  SequencePrediction2$X73[i] <- suby$boman[1]
+  SequencePrediction2$X74[i] <- suby$aindex[1]
+}
+SequencePrediction2$cpl <- paste(SequencePrediction2$X60, SequencePrediction2$X59, sep = "-")
+SequencePrediction2$binding <- rep("Yes", dim(SequencePrediction2)[1])
+```
+
+```{r}
+# X1+X2+X3+X4+X5+X6+X7+X8+X9+X10+X11+X12+X13+X14+X15+X16+X17+X18+X19+X20+X21+X22+X23+X24+X25+X26+X27+X28+X29+X30+X31+X32+X33+X34+X35+X36+X37+X38
+t <- tree(X9~X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58, data = SequencePrediction2)
+summary(t)
+View(SequencePrediction2)
+```
+
+```{r}
+sp <- SequencePrediction2
+sp$X10 <- ifelse(sp$X10 == aminoacids[12], 1, 0)
+sp$X10 <- as.factor(sp$X10)
+t <- tree(X10~X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58, data = sp)
+t <- summary(t)
+t
+t
+
+MatrixSequenceTree <- matrix(data = NA, nrow = 38, ncol = 21)
+all <- c(aminoacids, "X")
+for(i in 1:38){
+  for(j in 1:21){
+    sp <- SequencePrediction2
+    position_i <- sp[,i]
+    position_i <- ifelse(position_i == all[j], 1, 0)
+    position_i <- as.factor(position_i)
+    sp[,i] <- position_i
+    t <- tree(sp[,i] ~ sp[,39]+sp[,40]+sp[,41]+sp[,42]+sp[,43]+sp[,44]+sp[,45]+sp[,46]+sp[,47]+sp[,48]+sp[,49]+sp[,50]+sp[,51]+sp[,52]+sp[,53]+sp[,54]+sp[,55]+sp[,56]+sp[,57]+sp[,58])
+    t <- summary(t)
+    MatrixSequenceTree[i,j] <- t$misclass[1] / t$misclass[2]
+  }
+}
+heatmaply(MatrixSequenceTree, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red"))
+```
+
+```{r}
+RandomlyChosenEpitopes <- sample(AllEpitopes, 1, replace = F)
+sp_test <- subset(SequencePrediction2, X59 == RandomlyChosenEpitopes)
+sp_train <- subset(SequencePrediction2, !(X59 == RandomlyChosenEpitopes))
+for(i in 1:58){
+  sp_test[,i] <- as.factor(sp_test[,i])
+  sp_train[,i] <- as.factor(sp_train[,i])
+}
+AllAmino <- c(aminoacids, "X")
+
+predicted_tcrb <- c()
+for(i in 1:38){
+  possible_aa_for_position_i <- c()
+  for(j in 1:21){
+    sp <- sp_train
+    sp[,i] <- ifelse(sp[,i] == AllAmino[j], 1, 0)
+    sp[,i] <- as.factor(sp[,i])
+    if(length(unique(sp[,i])) == 2){
+      tree_train <- randomForest(sp[,i] ~ X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58+X68+X69+X70+X71+X72+X73+X74, data = sp, ntree = 50)
+      pred <- predict(tree_train, sp_test[,c(39:58, 68:74)], type = "prob")
+      pred <- pred[1, 1]
+    } else if(unique(sp[,i]) == c("0")) {
+      pred <- 1
+    } else if(unique(sp[,i]) == c("1")){
+      pred <- 0
+    }
+    possible_aa_for_position_i <- append(possible_aa_for_position_i, pred)
+  }
+  min <- min(possible_aa_for_position_i)
+  min <- match(min, possible_aa_for_position_i)
+  predicted_tcrb <- append(predicted_tcrb, AllAmino[min])
+}
+x <- match("X", predicted_tcrb)
+predicted_tcrb <- predicted_tcrb[-c(x:length(predicted_tcrb))]
+predicted_tcrb <- paste(predicted_tcrb, collapse = "")
+RandomlyChosenEpitopes
+predicted_tcrb
+sp_test$X60
+predicted_tcrb %in% sp_test$X60
+```
+
+```{r}
+RandomlyChosenEpitopes <- sample(AllEpitopes, 1, replace = F)
+#RandomlyChosenEpitopes <- "LLFGYPVYV"
+sp_test <- subset(SequencePrediction2, X59 == RandomlyChosenEpitopes)
+sp_train <- subset(SequencePrediction2, !(X59 == RandomlyChosenEpitopes))
+for(i in 1:58){
+  sp_test[,i] <- as.factor(sp_test[,i])
+  sp_train[,i] <- as.factor(sp_train[,i])
+}
+AllAmino <- c(aminoacids, "X")
+
+predicted_tcrb <- c()
+for(i in 1:38){
+  possible_aa_for_position_i <- c()
+  for(j in 1:21){
+    sp <- sp_train
+    sp[,i] <- ifelse(sp[,i] == AllAmino[j], 1, 0)
+    sp[,i] <- as.factor(sp[,i])
+    if(length(unique(sp[,i])) == 2){
+      tree_train <- randomForest(sp[,i] ~ X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58+X68+X69+X70+X71+X72+X73+X74, data = sp, ntree = 50)
+      pred <- predict(tree_train, sp_test[,c(39:58, 68:74)], type = "prob")
+      pred <- pred[1, 1]
+    } else if(unique(sp[,i]) == c("0")) {
+      pred <- 1
+    } else if(unique(sp[,i]) == c("1")){
+      pred <- 0
+    }
+    possible_aa_for_position_i <- append(possible_aa_for_position_i, pred)
+  }
+  min <- min(possible_aa_for_position_i)
+  min <- match(min, possible_aa_for_position_i)
+  predicted_tcrb <- append(predicted_tcrb, AllAmino[min])
+}
+x <- match("X", predicted_tcrb)
+predicted_tcrb <- predicted_tcrb[-c(x:length(predicted_tcrb))]
+predicted_tcrb <- paste(predicted_tcrb, collapse = "")
+RandomlyChosenEpitopes
+predicted_tcrb
+sp_test$X60
+predicted_tcrb %in% sp_test$X60
+```
+
+```{r}
+pwerrors <- matrix(data = NA, nrow = 4, ncol = 38)
+```
+
+```{r}
+# predict more than 1 sequences
+# this one
+RandomlyChosenEpitopes <- "KRWIIMGLNK"
+sp_test <- subset(SequencePrediction2, X59 == RandomlyChosenEpitopes)
+sp_train <- subset(SequencePrediction2, !(X59 == RandomlyChosenEpitopes))
+View(sp_test)
+for(i in 1:58){
+  sp_test[,i] <- as.factor(sp_test[,i])
+  sp_train[,i] <- as.factor(sp_train[,i])
+}
+AllAmino <- c(aminoacids, "X")
+predicted_tcrb <- matrix(data = NA, nrow = 21, ncol = 38)
+for(i in 1:38){
+  possible_aa_for_position_i <- c()
+  for(j in 1:21){
+    sp <- sp_train
+    sp[,i] <- ifelse(sp[,i] == AllAmino[j], 1, 0)
+    sp[,i] <- as.factor(sp[,i])
+    if(length(unique(sp[,i])) == 2){
+      tree_train <- randomForest(sp[,i] ~ X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58+X68+X69+X70+X71+X72+X73+X74, data = sp, ntree = 50)
+      pred <- predict(tree_train, sp_test[,c(39:58, 68:74)], type = "prob")
+      pred <- pred[1, 1]
+    } else if(unique(sp[,i]) == c("0")) {
+      pred <- 1
+    } else if(unique(sp[,i]) == c("1")){
+      pred <- 0
+    }
+    possible_aa_for_position_i <- append(possible_aa_for_position_i, pred)
+  }
+  #z <- data.frame(AllAmino, possible_aa_for_position_i)
+  #z <- z[order(z$possible_aa_for_position_i),]
+  predicted_tcrb[,i] <- 1 - possible_aa_for_position_i
+}
+RandomlyChosenEpitopes
+rownames(predicted_tcrb) <- AllAmino
+colnames(predicted_tcrb) <- c(1:38)
+#sp_test$X60
+heatmaply(predicted_tcrb, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red", midpoint = 0.5,limits = c(0, 1)))
+true_seq <- sp_test$X60
+#true_seq
+true <- matrix(data = 0, nrow = 21, ncol = 38)
+rownames(true) <- AllAmino
+colnames(true) <- c(1:38)
+#true
+for(i in 1:length(true_seq)){
+  tcr <- true_seq[i]
+  tcr <- strsplit(tcr, split = "")[[1]]
+  while(length(tcr) != 38){
+    tcr <- append(tcr, "X")
+  }
+  for(j in 1:38){
+    aa <- tcr[j]
+    aa <- match(aa, AllAmino)
+    true[aa, j] <- true[aa, j] + 1 
+  }
+}
+true <- true/length(true_seq)
+heatmaply(true, Colv = NA, Rowv = NA, scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(low = "blue", high = "red", midpoint = 0.5,limits = c(0, 1)))
+
+position_wise_error <- c()
+for(i in 1:38){
+  p <- predicted_tcrb[,i]
+  p <- as.vector(p)
+  t <- true[,i]
+  t <- as.vector(t)
+  position_wise_error <- append(position_wise_error, mean(abs(p-t)))
+}
+position_wise_error
+mean(position_wise_error)
+pos <- c(1:38)
+plot(pos, position_wise_error, type = "l", col = "red")
+```
+
+
+```{r}
+#pwerrors[4,] <- position_wise_error
+#View(pwerrors)
+plot(c(1:38), pwerrors[1,], type = "l", col = "red", xlab = "Position", ylab = "Position Wise Error", ylim = c(0, 0.15))
+lines(c(1:38), pwerrors[2,], col = "blue")
+lines(c(1:38), pwerrors[3,], col = "green")
+lines(c(1:38), pwerrors[4,], col = "purple")
+legend(x="topright", legend=c("TTDPSFLGRY", "KLFEFLVYGV", "LSLRNPILV", "KRWIIMGLNK"), col=c("red", "blue", "green", "purple"), lty=c(1,1))
+```
+
+```{r}
+train <- subset(Shuffled, Epi == RandomlyChosenEpitopes)
+rf <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = Shuffled, ntree = 50)
+
+test11 <- nchar(predicted_tcrb)
+test12 <- charge(predicted_tcrb)
+test13 <- instaIndex(predicted_tcrb)
+test14 <- hydrophobicity(predicted_tcrb)
+test15 <- 0
+for(i in 1:nchar(predicted_tcrb)){
+  x <- match(substr(predicted_tcrb, i, i), aminoacids)
+  x <- mm[x]
+  test15 <- test15 + x
+}
+test15 <- test15 - (nchar(predicted_tcrb)-1)*18
+test16 <- boman(predicted_tcrb)
+test17 <- aIndex(predicted_tcrb)
+sub <- subset(DataCouples, Sequence == RandomlyChosenEpitopes)
+test21 <- sub$length[1]
+test22 <- sub$charge[1]
+test23 <- sub$insta[1]
+test24 <- sub$hydro[1]
+test25 <- sub$MolMass[1]
+test26 <- sub$boman[1]
+test27 <- sub$aindex[1]
+test <- data.frame(test11, test12, test13, test14, test15, test16, test17, test21, test22, test23, test24, test25, test26, test27)
+colnames(test) <- c("X11", "X12", "X13", "X14", "X15", "X16", "X17", "X21", "X22", "X23", "X24", "X25", "X26", "X27")
+predict(rf, test[1:14], type = "prob")
+predict(rf, test[1:14], type = "prob")[1,2]
+predict(rf, test[1:14], type = "prob")[1,1]
+#
+prediction <- matrix(data = NA, nrow = 20, ncol = 4)
+for(k in 1:20){
+  RandomlyChosenEpitopes <- sample(AllEpitopes, 1, replace = F)
+  sp_test <- subset(SequencePrediction2, X59 == RandomlyChosenEpitopes)
+  sp_train <- subset(SequencePrediction2, !(X59 == RandomlyChosenEpitopes))
+  for(i in 1:58){
+    sp_test[,i] <- as.factor(sp_test[,i])
+    sp_train[,i] <- as.factor(sp_train[,i])
+  }
+  AllAmino <- c(aminoacids, "X")
+  predicted_tcrb <- c()
+  for(i in 1:38){
+    possible_aa_for_position_i <- c()
+    for(j in 1:21){
+      sp <- sp_train
+      sp[,i] <- ifelse(sp[,i] == AllAmino[j], 1, 0)
+      sp[,i] <- as.factor(sp[,i])
+      tree_train <- tree(sp[,i] ~ X39+X40+X41+X42+X43+X44+X45+X46+X47+X48+X49+X50+X51+X52+X53+X54+X55+X56+X57+X58+X68+X69+X70+X71+X72+X73+X74, data = sp)
+      pred <- predict(tree_train, sp_test[,c(39:58, 68:74)], type = "vector")
+      pred <- pred[1, 1]
+      possible_aa_for_position_i <- append(possible_aa_for_position_i, pred)
+    }
+    min <- min(possible_aa_for_position_i)
+    min <- match(min, possible_aa_for_position_i)
+    predicted_tcrb <- append(predicted_tcrb, AllAmino[min])
+  }
+  x <- match("X", predicted_tcrb)
+  predicted_tcrb <- predicted_tcrb[-c(x:length(predicted_tcrb))]
+  predicted_tcrb <- paste(predicted_tcrb, collapse = "")
+  rf <- randomForest(binding~X11+X12+X13+X14+X15+X16+X17+X21+X22+X23+X24+X25+X26+X27, data = Shuffled, ntree = 50)
+  test11 <- nchar(predicted_tcrb)
+  test12 <- charge(predicted_tcrb)
+  test13 <- instaIndex(predicted_tcrb)
+  test14 <- hydrophobicity(predicted_tcrb)
+  test15 <- 0
+  for(i in 1:nchar(predicted_tcrb)){
+    x <- match(substr(predicted_tcrb, i, i), aminoacids)
+    x <- mm[x]
+    test15 <- test15 + x
+  }
+  test15 <- test15 - (nchar(predicted_tcrb)-1)*18
+  test16 <- boman(predicted_tcrb)
+  test17 <- aIndex(predicted_tcrb)
+  sub <- subset(DataCouples, Sequence == RandomlyChosenEpitopes)
+  test21 <- sub$length[1]
+  test22 <- sub$charge[1]
+  test23 <- sub$insta[1]
+  test24 <- sub$hydro[1]
+  test25 <- sub$MolMass[1]
+  test26 <- sub$boman[1]
+  test27 <- sub$aindex[1]
+  test <- data.frame(test11, test12, test13, test14, test15, test16, test17, test21, test22, test23, test24, test25, test26, test27)
+  colnames(test) <- c("X11", "X12", "X13", "X14", "X15", "X16", "X17", "X21", "X22", "X23", "X24", "X25", "X26", "X27")
+  pred1 <- predict(rf, test[1:14], type = "prob")[1,2]
+  pred2 <- predict(rf, test[1:14], type = "prob")[1,1]
+  prediction[i,1] <- RandomlyChosenEpitopes
+  prediction[i,2] <- predicted_tcrb
+  prediction[i,3] <- pred1
+  prediction[i,4] <- pred2
+}
+
+colnames(prediction) <- c("Epitope", "Predicted TCRB", "Yes", "No")
+prediction
+```
+
+# ANNDL Data sets preparations
+
+```{r}
+dim(Shuffled)
+index <- c(1:dim(Shuffled)[1])
+train <- sample(index, 40000, replace = F)
+test <- setdiff(index, train)
+train <- Shuffled[train, ]
+test <- Shuffled[test, ]
+write.csv(train, "train.csv", row.names = F)
+write.csv(test, "test.csv", row.names = F)
+```
+
+```{r}
+AllTCRB[1]
+aminoacids
+to_binary <- function(peptide){
+  peptide <- strsplit(peptide, split = "")[[1]]
+  for(k in 1:length(peptide)){
+    peptide[k] <- as.numeric(match(peptide[k], aminoacids))
+  }
+  return(as.numeric(peptide))
+}
+to_binary(AllTCRB[1])
+```
+
+```{r}
+matrix <- matrix(data = 0, nrow = nrow(Shuffled), ncol = 59)
+for(i in 1:nrow(matrix)){
+  epi <- Shuffled$Epi[i]
+  epi <- to_binary(epi)
+  while(length(epi) != 20){
+    epi <- append(epi, 0)
+  }
+  tcr <- Shuffled$TCR[i]
+  tcr <- to_binary(tcr)
+  while(length(tcr) != 38){
+    tcr <- append(tcr, 0)
+  }
+  matrix[i,1:58] <- c(epi, tcr)
+}
+matrix <- data.frame(matrix)
+matrix[,59] <- Shuffled$binding
+View(matrix)
+matrix$TCR <- Shuffled$TCR
+matrix$Epi <- Shuffled$Epi
+```
+
+```{r}
+# Couple Split
+index <- c(1:dim(matrix)[1])
+train <- sample(index, 40000, replace = F)
+test <- setdiff(index, train)
+train <- matrix[train, ]
+test <- matrix[test, ]
+write.csv(train, "train_cs.csv", row.names = F)
+write.csv(test, "test_cs.csv", row.names = F)
+```
+
+```{r}
+# Epitope Split
+UnseenEpitopes <- sample(AllEpitopes, 100, replace = F)
+train <- subset(matrix, !(Epi %in% UnseenEpitopes))
+test <- subset(matrix, Epi %in% UnseenEpitopes)
+write.csv(train, "train_es.csv", row.names = F)
+write.csv(test, "test_es.csv", row.names = F)
+```
+
+```{r}
+# TCR Split
+UnseenTCR <- sample(AllTCRB, 100, replace = F)
+train <- subset(matrix, !(TCR %in% UnseenTCR))
+test <- subset(matrix, TCR %in% UnseenTCR)
+write.csv(train, "train_ts.csv", row.names = F)
+write.csv(test, "test_ts.csv", row.names = F)
+```
+
+```{r}
+# Full Split
+UnseenTCR <- sample(AllTCRB, 200, replace = F)
+UnseenEpi <- sample(AllEpitopes, 200, replace = F)
+test_data <- subset(matrix, TCR %in% UnseenTCR | Epi %in% UnseenEpi)
+train_data <- subset(matrix, !(TCR %in% UnseenTCR | Epi %in% UnseenEpi))
+write.csv(train_data, "train_fs.csv", row.names = F)
+write.csv(test_data, "test_fs.csv", row.names = F)
+```
+
+```{r}
+Epi <- DataCleaned$peptide
+TCR <- DataCleaned$tcr
+matrix <- matrix(data = NA, nrow = length(Epi), ncol = 60)
+matrix[,1] <- Epi
+matrix[,2] <- TCR
+for(i in 1:nrow(matrix)){
+  x <- Epi[i]
+  x <- strsplit(x, split = "")[[1]]
+  #x <- to_binary(x)
+  while(length(x) != 20){
+    x <- append(x, "X")
+  }
+  y <- TCR[i]
+  y <- strsplit(y, split = "")[[1]]
+  #y <- to_binary(y)
+  while(length(y) != 38){
+    y <- append(y, "X")
+  }
+  matrix[i,3:22] <- x
+  matrix[i,23:60] <- y
+}
+matrix <- data.frame(matrix)
+write.csv(matrix, "train5.csv", row.names = F)
+```
+
+```{r}
+positive <- subset(Shuffled, binding == "Yes")
+SequencePredictionDL <- matrix(data = NA, nrow = dim(positive)[1], ncol = 60)
+for(i in 1:dim(positive)[1]){
+  y <- positive$Epi[i]
+  y <- to_binary(y)
+  while(length(y)!=20){
+    y <- append(y, 21)
+  }
+  x <- positive$TCR[i]
+  x <- strsplit(x, split = "")[[1]]
+  while(length(x)!=38){
+    x <- append(x, "X")
+  }
+  z <- c(y, x, positive$Epi[i], positive$TCR[i])
+  SequencePredictionDL[i,] <- z
+}
+#View(positive)
+#View(SequencePredictionDL)
+SequencePredictionDL <- data.frame(SequencePredictionDL)
+RandomlyChosenEpitopes <- sample(AllEpitopes, 10, replace = F)
+train_sp <- subset(SequencePredictionDL, !(X59 %in% RandomlyChosenEpitopes))
+test_sp1 <- subset(SequencePredictionDL, X59 %in% RandomlyChosenEpitopes)
+dim(SequencePredictionDL)
+dim(train_sp)
+dim(test_sp1)
+test_epis <- unique(test_sp1$X59)
+test_sp2 <- matrix(data = NA, nrow = 10, ncol = 20)
+for(i in 1:10){
+  sub <- subset(test_sp1, X59 == test_epis[i])
+  sub <- sub[1,1:20]
+  sub <- stack(sub)$values
+  test_sp2[i,] <- sub
+}
+dim(test_sp2)
+View(test_sp2)
+write.csv(train_sp, "train_sp.csv", row.names = F)
+write.csv(test_sp1, "test_sp1.csv", row.names = F)
+write.csv(test_sp2, "test_sp2.csv", row.names = F)
+```
+
+
+
+
+
+
