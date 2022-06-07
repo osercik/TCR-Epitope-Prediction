@@ -1,7 +1,7 @@
 # TCR-Epitope-Prediction
 Master Thesis
 
-Welcome in this folder. Herein, you can find my code (MasterProef.rmd) for my master thesis project.
+Welcome in this folder. Herein, you can find my code (MasterProef.rmd and MasterProef.ipynb) for my master thesis project.
 
 Official Title: Prediction of T-Cell Receptor Peptide Binding using Machine Learning and Ab Initio Principles.
 
