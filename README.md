@@ -2,6 +2,7 @@
 Master Thesis of Statistics and Data Science
 
 Welcome in this folder. Herein, you can find my code (MasterProef.rmd) for my master thesis project.
+
 Official Title: Prediction of T-Cell Receptor Peptide Binding using Machine Learning and Ab Initio Principles.
 
 Note: because of the large size, the data set couldn't be uploaded here. However, the data can be uploaded via the
