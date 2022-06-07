@@ -1,5 +1,5 @@
 # TCR-Epitope-Prediction
-Master Thesis of Statistics and Data Science
+Master Thesis
 
 Welcome in this folder. Herein, you can find my code (MasterProef.rmd) for my master thesis project.
 
