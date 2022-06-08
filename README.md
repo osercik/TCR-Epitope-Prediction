@@ -1,6 +1,6 @@
 Content:
 
-```MasterProef.rmd```: code with machine learning models
+```MasterProef.Rmd```: code with machine learning models
 
 ```MasterProef.ipynb```: code with deep learning models
 
